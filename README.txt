@@ -30,3 +30,6 @@ Complete script above - submission for grading
 
 MovieLens.rmd
 R Markdown document  - submission for grading
+
+MovieLens.pdf
+PDF document - submission for grading
