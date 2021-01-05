@@ -8,7 +8,7 @@ Project uses MovieLens 10M file
 
 edxsetup.R
 Creates the edx set and validation set(final hold-out test set)
-\
+/
 
 eda.R
 
