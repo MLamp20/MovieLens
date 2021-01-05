@@ -1,0 +1,416 @@
+---
+title: "MovieLens Project- Harvard"
+author: "Mary Lampmann"
+date: "10/06/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,dev ="pdf" )
+```
+
+### **Introduction**
+MovieLens is a web-based movie recommender system and virtual community that suggests movies for member users to watch based on their film preferences.  
+This report documents my creation of a Movie Recommendation System specific to the 10M version of the MovieLens dataset. 
+
+https://grouplens.org/datasets/movielens/10m/
+http://files.grouplens.org/datasets/movielens/ml-10m.zip
+```{r load libraries, echo=F, message=F }
+library(tidyverse)
+library(caret)
+library(data.table)
+library(gridExtra)
+library(lubridate)
+
+```
+
+```{r load edx for eda, echo=F, message=F}
+load("~/Mary Continuing Education/Harvard/Movielens/projects/data/rda/edx.rda")
+```
+The goal of this project is the training of a machine learning algorithm which will use inputs from a subset of the data to predict ratings in a separate subset of that same data, and do so with the lowest residual mean squared error(RMSE) possible.  For the grading on this specific project, the target is an RMSE below .8649.
+
+#### Project Key steps
+
+1. Partition the MovieLens 10M dataset to create a training subset(**edx**) and a final hold-out test set(**validation**) for use in assessing the residual mean squared error(RMSE) on the recommendation system proposed  
+
+2. Conduct exploratory data analysis (EDA) on the training set **edx** for use in machine learning(ML) model development
+
+3. After EDA, partition the **edx** training dataset to allow separate training (*train_edx*) and test sets(*test_edx*) for use in evaluation of ML models , thus wholly preserving the hold-out **validation** data set for a final evaluation on the proposed Movie Recommendation ML algorithm
+
+4. Iteratively train different machine learning algorithms on the dataset to elicit the lowest RMSE results, and generate a final Movie Recommendation Model
+
+5. Test the final Movie Recommendation Model on the **validation** hold out test dataset
+
+### **Methods/Analysis**
+
+#### **Exploratory Data Analysis**
+```{r dims distinct movie user genre, echo=FALSE}
+
+rows<-dim(edx)[[1]]
+columns<-dim(edx)[[2]]
+n_movies_edx<-n_distinct(edx$movieId)
+n_users_edx<-n_distinct(edx$userId)
+n_genres_edx<-n_distinct(edx$genres)
+
+```
+The initial training dataset, **edx**, is comprised of  `r rows` rows and `r columns` columns, and includes ratings of `r n_movies_edx` distinct movies, `r n_users_edx` distinct users, and `r n_genres_edx` distinct genres, with those distinct genres being a compilation of genres present in a specific movie.
+```{r average counts, echo=F}
+
+mean_rating_count_per_movie <- round(nrow(edx)/n_distinct(edx$movieId))
+mean_rating_count_per_user <- round(nrow(edx)/n_distinct(edx$userId))
+mean_rating_count_per_genre <- round(nrow(edx)/n_distinct(edx$genres))
+```
+A movie in this dataset, **edx**, has, on average,  `r mean_rating_count_per_movie` reviews.  A user has rated, on average, `r mean_rating_count_per_user` movies.  The genres have been rated, on average, 11292 times.
+
+##### Plots of Movie, User and Rating Counts
+There were some movies that were rated only once.  Movies with few ratings (<=10) are excluded in some of the following tables for purposes of illustration.
+  
+```{r movie rating ct, echo=F,fig.width=3,fig.height=2}
+edx %>%     
+  dplyr::count(movieId) %>% 
+  ggplot(aes(n)) + geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() + ggtitle("Movies - Quantity of Ratings")
+```
+
+In general, users rated a series of movies, with the majority rating less than 100 movies.
+  
+```{r user count, echo=F, fig.width=3,fig.height=2}
+edx %>%
+  dplyr::count(userId) %>% 
+  ggplot(aes(n)) + geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() + ggtitle("Users - Quantity of Ratings")
+```
+
+The ratings ranged from 1/2 of a star up to 5 stars. In general, users were more likely to award whole number ratings than 1/2, with 4 stars being the most common rating.  
+
+```{r rating distribution, echo= F, fig.width=3,fig.height=2}
+edx %>% ggplot(aes(rating)) + geom_bar() + ggtitle("Distribution of Ratings")
+```
+
+```{r mean sd distrib within 2 SD, echo=F}
+options(digits=2)
+
+mean_edx_rating <-mean(edx$rating)
+sd_edx_rating <-sd(edx$rating)
+
+z<-scale(edx$rating)
+two_sd<-mean(abs(z)<2)
+```
+The mean value of the star ratings of the movies is `r mean_edx_rating`, and standard deviation is `r sd_edx_rating`. `r two_sd * 100`% of the ratings fall within 2 standard deviations of the mean.
+
+##### Movie User and Genre Rating Examples
+
+The best rated movies (10+ ratings), based on rating value(stars), are consistent with popular and critically acclaimed movies, but the ratings count vary widely within the movies with the highest average star ratings.  The Shawshank Redemption, at the #1 position with an average rating of 4.46 based on 28,015 ratings, had a volume of rating almost 18x that of #10 position Paths of Glory (1,571 ratings). 
+```{r best rated more than 10 users, message=F, echo=F}
+best_rated_10_plus_ratings <- edx %>% group_by(movieId) %>% 
+  summarize(title=title[1], count=n(),avg_rating=sum(rating)/count) %>%
+  filter( count > 10 )%>% top_n(25,avg_rating)%>% arrange(desc(avg_rating,count))
+head(best_rated_10_plus_ratings,10)
+```
+
+```{r count vs avg rating, echo=F,message=F}
+best_rated_10_plus_ratings_for_cor <- edx %>% group_by(movieId) %>% 
+summarize(title=title[1], count=n(),avg_rating=sum(rating)/count) %>%
+filter( count > 10 )
+count_avg_rating_cor<-cor(best_rated_10_plus_ratings_for_cor$count,best_rated_10_plus_ratings_for_cor$avg_rating)
+```
+
+\  
+There is low (`r count_avg_rating_cor * 100`)% correlation between the number of ratings given and the average star rating in this subset(10+ ratings per movie) of the data.
+
+\  
+\    
+\    
+Another important observation on the **edx** dataset: it is most common to see a significant spread between *the lowest rating* awarded by a specific user to a movie and *the highest*. On a star rating scale that starts at 0.5 and ends at 5.0 (an absolute spread of 4.5), the spread of ratings for a majority of users reside in the 4 and 4.5 values.  This suggests that users are rating both movies that they liked and movies that they absolutely did not. The wide range of these ratings suggest value in incorporating user bias into the ML model.
+  
+```{r user rating spread, echo=F,message=F,fig.width=3,fig.height=2}
+user_rating_range<-edx %>% group_by(userId) %>% 
+summarize(min=min(rating),max=max(rating), rating_spread=max-min)
+qplot(user_rating_range$rating_spread, bins = 20,xlab="User Movie Rating Spread")
+
+```
+
+\  
+A review of the genres (1000+ user ratings) shows significant variance between user rating counts and average ratings : genres like Drama | Film-Noir| Romance earned average ratings of 4.30 with almost 3000 user submissions, but the Drama and Comedy genres, with lower average star ratings, were each rated by over 700,000 times.  
+\  
+```{r best genre more than 1000 ratings,echo= F, message= F}
+best_genre_1000_plus_ratings_value <- edx %>% group_by(genres) %>% summarize(count = n(), avg_rating=sum(rating)/count) %>% filter( count > 1000 ) %>% top_n(25,avg_rating)%>% arrange(desc(avg_rating))
+head(best_genre_1000_plus_ratings_value)
+```
+
+```{r genres with most ratings,echo= F, message= F }
+best_genre_1000_plus_ratings_count <- edx %>% group_by(genres) %>% summarize(count = n(), avg_rating=sum(rating)/count) %>% filter( count > 1000 ) %>% top_n(25,count)%>% arrange(desc(count))
+head(best_genre_1000_plus_ratings_count)
+```
+
+##### Core Genre Types - Ratings
+
+The `r n_genres_edx` distinct genres in the dataset are composed of 19 base genre types, reaggregated in the following tables based on ratings of each movie that contained that genre (i.e. Drama). Users provided 700,000 + ratings of movies with Drama **as the only genre**(preceding table) , as compared to 3,900,000 + ratings on movies that contained Drama *as one genre of one or more genres*(following table).
+
+```{r genre separated rating count, echo= F, message= F }
+genre_split_rating_count <- edx %>% separate_rows(genres,sep="\\|") %>% group_by(genres)%>% summarize(count=n(), avg_rating=sum(rating)/count) %>% arrange(desc(count))
+
+genre_split_rating_count
+
+```
+
+The variance between average ratings - - Film-Noir and Horror representing opposite ends of the average star ratings users awarded - - suggest value in building genre bias into the movie recommendation model.
+
+```{r genre split in desc rating order, echo= F, message= F}
+genre_split_rating_desc <- edx %>% separate_rows(genres,sep="\\|") %>% group_by(genres)%>% summarize(count=n(), avg_rating=sum(rating)/count) %>% arrange(desc(avg_rating))
+
+genre_split_rating_desc
+```
+
+##### Time Effect on Ratings
+
+Different time periods (week, month, quarter) were evaluated to analyze the value of including time of a user rating as a component of the machine learning algorithm model. Although there was some time effect in play, the effect appeared to be minimal, and will not be incorporated into the ML model.
+
+```{r time period comparison, message= F,echo= FALSE}
+edx_time_wk <- mutate(edx, date = as_datetime(timestamp)) %>%
+  mutate(date = round_date(date, unit = "week")) %>%
+  group_by(date) %>%
+  summarize(rating = mean(rating)) %>%
+  ggplot(aes(date, rating)) + geom_point() + geom_smooth() + ggtitle("Rating by Week")
+edx_time_month <- mutate(edx, date = as_datetime(timestamp)) %>%
+  mutate(date = round_date(date, unit = "month")) %>%
+  group_by(date) %>%
+  summarize(rating = mean(rating)) %>%
+  ggplot(aes(date, rating)) + geom_point() + geom_smooth(fill="blue")+ ggtitle("Rating by Month")
+edx_time_qtr <- mutate(edx, date = as_datetime(timestamp)) %>% 
+  mutate(date = round_date(date, unit = "quarter")) %>%
+  group_by(date) %>%
+  summarize(rating = mean(rating)) %>%
+  ggplot(aes(date, rating)) + geom_point() + geom_smooth(fill="darkgrey") + ggtitle("Rating by Quarter")
+
+grid.arrange(edx_time_wk, edx_time_month ,edx_time_qtr, nrow=3)
+
+```
+
+#### **Model Construction Methods**
+
+##### **Split edx into train and test sets**
+
+The next step in the machine learning algorithm creation was the split of the **edx** data set into training and testing subsets, *train_edx* and *test_edx* respectively.  
+
+A residual mean squared error function(RMSE) was created, as was a data frame that would detail the RMSE values associated with different machine learning algorithms.
+```{r RMSE function, eval=F}
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```
+##### **The iterative movie recommendation algorithm process:**  
+
+Next steps were the creation and training of different recommendation models, with the rationale for the model and RMSE results detailed here.
+    
+\* Average As Predictor Model - compare the mean value of the *train_edx* rating to the *test_edx* rating values
+
+```{r load edx train test, echo=F, warning=F,message=F}
+load("~/Mary Continuing Education/Harvard/Movielens/projects/data/rda/train_edx.rda")
+load("~/Mary Continuing Education/Harvard/Movielens/projects/data/rda/test_edx.rda")
+```
+
+```{r baseline,  echo=F, message=F,warning=F}
+options(digits=4)
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+mu_hat<-mean(train_edx$rating)
+
+mean_rmse <- RMSE(test_edx$rating, mu_hat)
+rmse_result <- data_frame(Method = "Average As Predictor", RMSE = mean_rmse)
+rmse_result
+
+```
+** Movie and User Model - group by distinct movie identification number and distinct user identification number to identify unique rating "bias" for that specific movie and user. Adjust each individual user/movie rating by these biases, generate predicted ratings on the *test_edx* dataset using the residual values.
+```{r Movie User Model, echo=F, message= F}
+movie_avgs <- train_edx %>% group_by(movieId) %>% 
+summarize(b_i=mean(rating-mu_hat))
+
+user_avgs <- train_edx %>% left_join(movie_avgs, by = "movieId")%>% group_by(userId)%>%
+summarize(b_u=mean(rating-mu_hat-b_i))
+
+predicted_ratings <- test_edx %>% left_join(movie_avgs, by="movieId") %>%
+left_join(user_avgs,by="userId") %>% mutate(pred = mu_hat + b_i + b_u) %>% pull(pred)
+
+model_1<-RMSE(test_edx$rating, predicted_ratings)
+
+rmse_result <- bind_rows(rmse_result,
+                          data_frame(Method="Movie and User Model",
+                                     RMSE = model_1))
+
+rmse_result %>% knitr::kable()
+```
+
+*** Movie User and Genre Model - same as Movie and User model above, adds group by distinct genre identifier, identification of genre biases, adjustments to reflect residual biases, generation of predicted ratings on the *test_edx* dataset.
+```{r movie user genre model non regularized, echo=F, message= F}
+genre_avgs <- train_edx %>% left_join(movie_avgs, by = "movieId") %>% 
+left_join(user_avgs, by = "userId") %>% group_by(genres) %>% 
+summarize(b_g = mean(rating - mu_hat -b_i -b_u))
+predicted_ratings <- test_edx %>% left_join(movie_avgs, by="movieId") %>% 
+left_join(user_avgs,by="userId") %>% left_join(genre_avgs, by="genres") %>% 
+mutate(pred = mu_hat + b_i + b_u + b_g) %>% pull(pred)
+
+model_2<-RMSE(test_edx$rating,predicted_ratings)
+
+rmse_result <- bind_rows(rmse_result,
+                         data_frame(Method="Movie and User and Genre Model",  
+                                    RMSE = model_2))
+rmse_result %>% knitr::kable()
+```
+
+##### Residual Biases in Model 
+
+Incorporating movie, user, and genre biases into the model reduced the RMSE to `r model_2`, not a material change from the model considering movie and user biases. A review of the residual biases for each prior to a regularization process shows the residual biases to be applied to the model as both *a reduction to the average(movie rating bias)* and an *addition to the average (user rating bias, and to a smaller degree, genre rating bias)*,see below:
+
+```{r residual movie bias, echo= F,fig.width=3, fig.height=2}
+movie_avgs %>% qplot(b_i, geom ="histogram", bins = 10, data = ., color = I("black"),
+xlab="Residual Movie Bias")
+
+```
+
+```{r residual user bias,echo= F,fig.width=3,fig.height=2}
+user_avgs %>% qplot(b_u, geom ="histogram", bins = 10, data = ., color = I("black"),
+xlab="Residual User Bias")
+```
+
+```{r residual genre bias, echo= F,fig.width=3,fig.height=2}
+genre_avgs %>% qplot(b_g, geom ="histogram", bins = 10, data = ., color = I("black"),
+xlab="Residual Genre Bias")
+```
+  
+##### Regularization and Cross Validation
+
+The next step in the model building process was to control for the effect of outliers on our model prediction by adding an error term to our model. Cross validation was used to determine the error model value (lambda) that minimizes the RMSE for this dataset.
+```{r generate tuned lambda movie user genre, echo=F,message=F}
+
+lambdas <- seq(0, 10, 0.05)
+rmses <- sapply(lambdas, function(l){
+  mu_hat <- mean(train_edx$rating)
+  b_i <- train_edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu_hat)/(n()+l))
+  b_u <- train_edx %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu_hat)/(n()+l))
+  b_g <- train_edx %>%
+    left_join(b_i, by="movieId") %>% 
+    left_join(b_u, by="userId") %>%
+    group_by(genres) %>%
+    summarize(b_g = sum(rating - b_i - b_u - mu_hat)/(n()+l))
+  predicted_ratings <- 
+    test_edx %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    left_join(b_g, by = "genres") %>%
+    mutate(pred = mu_hat + b_i + b_u + b_g) %>%
+    .$pred
+  return(RMSE(test_edx$rating,predicted_ratings))
+})
+tuned_lambda <- lambdas[which.min(rmses)]
+
+
+rmse_result <- bind_rows(rmse_result,
+                          data_frame(Method="Regularized Movie User Genre Bias Model",  
+                                     RMSE = min(rmses)))
+model_3<-min(rmses)
+
+rmse_result %>% knitr::kable()
+
+```
+
+##### Regularization Impact vs. Original Data
+
+The impact of the addition of the error term of `r tuned_lambda` can be seen in the following charts, which demonstrate how the regularization process shrinks the values of the outliers in the data.  In the chart, the size of the circle reflects the square root of the size of the  original signal.
+
+```{r tune lambda regularization,echo= F, message= F,fig.width=3.75,fig.height=2.5}
+
+movie_reg_avgs_trained <- train_edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mu_hat)/(n()+ tuned_lambda),n_i=n())
+user_reg_avgs_trained <- train_edx %>% 
+  left_join(movie_reg_avgs_trained, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - b_i - mu_hat)/(n()+ tuned_lambda),n_i=n())
+genre_reg_avgs_trained <- train_edx %>%
+  left_join(movie_reg_avgs_trained, by="movieId") %>% 
+  left_join(user_reg_avgs_trained, by="userId") %>%
+  group_by(genres) %>%
+  summarize(b_g = sum(rating - b_i - b_u - mu_hat)/(n()+ tuned_lambda),n_i=n())
+
+data.frame(original_movie_avgs = movie_avgs$b_i, 
+           regularized = movie_reg_avgs_trained$b_i, 
+           n = movie_reg_avgs_trained$n_i) %>%
+  ggplot(aes(original_movie_avgs, regularized, size=sqrt(n))) + 
+  geom_point(shape=1, alpha=0.5)+ ggtitle("Movie Bias Regularized")
+```
+
+```{r user bias regularized,echo= F,fig.width=3.75,fig.height=2.5}
+data_frame(original_user_avgs = user_avgs$b_u, 
+           regularized = user_reg_avgs_trained$b_u, 
+           n = user_reg_avgs_trained$n_i) %>%
+  ggplot(aes(original_user_avgs, regularized, size=sqrt(n))) + 
+  geom_point(shape=1, alpha=0.6)+ ggtitle("User Bias Regularized")
+```
+
+```{r genre bias regularized,echo= F,fig.width=3.75,fig.height=2.5}
+data_frame(original_genre_avgs = genre_avgs$b_g, 
+           regularized = genre_reg_avgs_trained$b_g, 
+           n = genre_reg_avgs_trained$n_i) %>%
+  ggplot(aes(original_genre_avgs, regularized, size=sqrt(n))) + 
+  geom_point(shape=1, alpha=0.7)+ ggtitle("Genre Bias Regularized")
+```
+```{r load validation, echo=F}
+load("~/Mary Continuing Education/Harvard/Movielens/projects/data/rda/validation.rda")
+options(digits = 4)
+```
+
+### **Final Model and Results**
+
+#### **Final Model - Regularized Movie & User & Genre Bias Model - Full Edx dataset and Validation holdout**
+
+The final Movie Recommendation System Model incorporates evaluation of residual bias in movie, user, and genres, and the use of a cross validated optimal lambda in a regularization process.  The R code and corresponding RMSE results are as follows:
+```{r Final Movie Recommendation Model,message=F}
+
+mu <- mean(edx$rating)
+
+movie_reg_avgs <- edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mu)/(n()+tuned_lambda))
+user_reg_avgs <- edx %>% 
+  left_join(movie_reg_avgs, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - b_i - mu)/(n()+tuned_lambda))
+genre_reg_avgs <- edx %>%
+  left_join(movie_reg_avgs, by="movieId") %>% 
+  left_join(user_reg_avgs, by="userId") %>%
+  group_by(genres) %>%
+  summarize(b_g = sum(rating - b_i- b_u - mu)/(n()+tuned_lambda))
+
+predicted_ratings <- 
+  validation %>% 
+  left_join(movie_reg_avgs, by = "movieId") %>%
+  left_join(user_reg_avgs, by = "userId") %>%
+  left_join(genre_reg_avgs, by = "genres") %>%
+  mutate(pred = mu + b_i + b_u + b_g) %>%
+  .$pred
+
+model_final <- RMSE(validation$rating,predicted_ratings)
+rmse_final_validation <- data_frame(Method="Regularized Movie User Genre Model(Full Edx & Validation)",  RMSE = model_final)
+
+rmse_final_validation
+
+```
+
+The final Movie Recommendation Model above generated an RMSE on the Validation hold out dataset of .864, below the goal RMSE of .8649. 
+
+### **Conclusion**
+
+The final Movie Recommendation Model above, incorporating regularization (error term lambda = `r tuned_lambda` ) on a dataset of residual biases in movie, user, and genre, does achieve our goal of predicting how many stars a user will give a movie, with RMSE results here below the target as well as very similar to levels that earned the Netflix Prize in 2007 and 2008, albeit on a much smaller database than that of the prize competition.  
+
+##### **Limitations of the model**
+
+The RMSE results here are tied to this model's fit to the specific subset of data that was partitioned in this process into the **edx** set(training set) and **validation** set (test set/hold out), and might not be replicated as favorably should the same model be used on future data partitions of the same MovieLens 10M dataset.  Repeat of this model evaluation process will require iteratively assessing this same model on different seeds for the data partition, both at the point of partition of the initial MovieLens 10M set, and at the point of partition of the edx set into *train_edx* and *test_edx* subsets.
+
